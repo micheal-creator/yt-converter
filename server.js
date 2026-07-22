@@ -26,66 +26,122 @@ function formatDuration(seconds) {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-// Extract YouTube Video ID
+// Robust video ID extractor for all YouTube / YouTube Music URLs
 function extractVideoId(url) {
   if (!url) return '';
-  if (url.includes('v=')) {
-    return url.split('v=')[1].split('&')[0];
-  } else if (url.includes('youtu.be/')) {
-    return url.split('youtu.be/')[1].split('?')[0];
-  }
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+  if (match && match[1]) return match[1];
+  if (url.includes('v=')) return url.split('v=')[1].split('&')[0];
   return '';
 }
 
 /**
- * Multi-Engine Audio Stream Resolver (Achieves 95%+ Reliability on Cloud Servers)
+ * Multi-Engine Audio Stream Resolver (Achieves 95%+ Reliability)
  */
 async function resolveAudioStreamUrl(url) {
   const videoId = extractVideoId(url);
+  const targetUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
 
-  // Engine 1: yt-dlp with mobile player client spoofing
+  // Engine 1: yt-dlp with android/mweb client
   try {
-    const directUrlProc = await exec(url, {
+    const directUrlProc = await exec(targetUrl, {
       getUrl: true,
       format: 'bestaudio/best',
       noWarnings: true,
       noPlaylist: true,
       userAgent: USER_AGENT,
-      extractorArgs: 'youtube:player_client=ios,mweb',
+      extractorArgs: 'youtube:player_client=android,mweb,web',
     });
 
-    const audioUrl = directUrlProc.stdout ? directUrlProc.stdout.trim() : '';
+    const audioUrl = directUrlProc.stdout ? directUrlProc.stdout.trim().split('\n')[0] : '';
     if (audioUrl && audioUrl.startsWith('http')) {
+      console.log('Engine 1 (yt-dlp) succeeded.');
       return audioUrl;
     }
   } catch (err) {
-    console.warn('Engine 1 (yt-dlp) blocked on Render IP, engaging Engine 2 fallback...');
+    console.warn('Engine 1 (yt-dlp) blocked on Render IP, engaging Engine 2 fallbacks...');
   }
 
-  // Engine 2: Failover to Piped / Invidious API instances
+  // Engine 2: Fallback APIs (Cobalt, Invidious, Piped)
   if (videoId) {
-    const apiEndpoints = [
-      `https://pipedapi.kavin.rocks/streams/${videoId}`,
-      `https://api.piped.yt/streams/${videoId}`,
-      `https://inv.tux.pizza/api/v1/videos/${videoId}`
+    // 2a. Cobalt API Fallback
+    try {
+      const cobRes = await fetch('https://api.cobalt.tools/', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'User-Agent': USER_AGENT
+        },
+        body: JSON.stringify({
+          url: targetUrl,
+          downloadMode: 'audio',
+          audioFormat: 'mp3'
+        })
+      });
+
+      if (cobRes.ok) {
+        const cobData = await cobRes.json();
+        if (cobData.url) {
+          console.log('Engine 2a (Cobalt API) succeeded.');
+          return cobData.url;
+        }
+      }
+    } catch (e) {
+      console.warn('Cobalt API fallback failed:', e.message);
+    }
+
+    // 2b. Invidious Instances (Parsed with adaptiveFormats)
+    const invidiousInstances = [
+      'https://inv.tux.pizza',
+      'https://invidious.nerdvpn.de',
+      'https://vid.puffyan.us',
+      'https://invidious.drgns.space'
     ];
 
-    for (const endpoint of apiEndpoints) {
+    for (const baseDomain of invidiousInstances) {
       try {
-        const response = await fetch(endpoint, {
+        const invRes = await fetch(`${baseDomain}/api/v1/videos/${videoId}`, {
           headers: { 'User-Agent': USER_AGENT }
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          const streams = data.audioStreams || [];
+        if (invRes.ok) {
+          const invData = await invRes.json();
+          const formats = invData.adaptiveFormats || invData.formatStreams || [];
+          const audioFormat = formats.find(f => f.type && f.type.includes('audio'));
+          if (audioFormat && audioFormat.url) {
+            console.log(`Engine 2b (Invidious: ${baseDomain}) succeeded.`);
+            return audioFormat.url;
+          }
+        }
+      } catch (e) {
+        console.warn(`Invidious instance (${baseDomain}) failed:`, e.message);
+      }
+    }
+
+    // 2c. Piped Instances (Parsed with audioStreams)
+    const pipedInstances = [
+      'https://pipedapi.kavin.rocks',
+      'https://api.piped.yt',
+      'https://pipedapi.tokhmi.xyz'
+    ];
+
+    for (const baseDomain of pipedInstances) {
+      try {
+        const pipedRes = await fetch(`${baseDomain}/streams/${videoId}`, {
+          headers: { 'User-Agent': USER_AGENT }
+        });
+
+        if (pipedRes.ok) {
+          const pipedData = await pipedRes.json();
+          const streams = pipedData.audioStreams || [];
           if (streams.length > 0 && streams[0].url) {
-            console.log(`Engine 2 succeeded using endpoint: ${endpoint}`);
+            console.log(`Engine 2c (Piped: ${baseDomain}) succeeded.`);
             return streams[0].url;
           }
         }
       } catch (e) {
-        console.warn(`Fallback endpoint failed (${endpoint}):`, e.message);
+        console.warn(`Piped instance (${baseDomain}) failed:`, e.message);
       }
     }
   }
@@ -94,7 +150,7 @@ async function resolveAudioStreamUrl(url) {
 }
 
 /**
- * 1. Fetch Metadata Endpoint (Analyzes URL and returns Track/Playlist table data)
+ * 1. Fetch Metadata Endpoint
  */
 app.post('/api/analyze', async (req, res) => {
   const { url } = req.body;
@@ -110,7 +166,7 @@ app.post('/api/analyze', async (req, res) => {
       noCallHome: true,
       flatPlaylist: true,
       userAgent: USER_AGENT,
-      extractorArgs: 'youtube:player_client=ios,mweb',
+      extractorArgs: 'youtube:player_client=android,mweb,web',
     });
 
     const metadata = JSON.parse(output.stdout);
@@ -151,7 +207,7 @@ app.post('/api/analyze', async (req, res) => {
       });
     }
 
-    // Standard Single Video / Music Track
+    // Standard Single Track
     const singleThumb = metadata.thumbnail || (metadata.id ? `https://i.ytimg.com/vi/${metadata.id}/hqdefault.jpg` : '');
 
     res.json({
@@ -189,16 +245,13 @@ app.post('/api/convert', async (req, res) => {
   const safeTitle = (title || 'audio').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim() || 'audio';
 
   try {
-    // Resolve audio stream URL with multi-engine fallback
     const audioStreamUrl = await resolveAudioStreamUrl(url);
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.mp3"`);
 
     ffmpeg(audioStreamUrl)
-      .inputOptions([
-        '-user_agent', USER_AGENT
-      ])
+      .inputOptions(['-user_agent', USER_AGENT])
       .audioCodec('libmp3lame')
       .audioBitrate(targetBitrate)
       .format('mp3')
