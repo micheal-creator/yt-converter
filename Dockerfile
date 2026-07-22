@@ -1,19 +1,16 @@
-FROM node:20-bookworm-slim
+FROM node:20-slim
 
-# Install FFmpeg, Python3, pip, and yt-dlp
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        python3 \
-        python3-pip \
-        python3-venv && \
-    pip3 install --no-cache-dir --break-system-packages yt-dlp && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Install Python3 and FFmpeg required for yt-dlp-exec and MP3 conversion
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python-is-python3 \
+    ffmpeg \
+    && rm -rf /var/lib/apt-get/lists/*
 
 WORKDIR /usr/src/app
 
 COPY package*.json ./
+
 RUN npm install --production
 
 COPY . .
