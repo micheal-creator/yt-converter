@@ -1,22 +1,18 @@
 const urlInput = document.getElementById('urlInput');
 const searchBtn = document.getElementById('searchBtn');
-const downloadBtn = document.getElementById('downloadBtn');
 const resultCard = document.getElementById('resultCard');
-const thumbnail = document.getElementById('thumbnail');
-const videoTitle = document.getElementById('videoTitle');
-const uploader = document.getElementById('uploader');
-const bitrateSelect = document.getElementById('bitrateSelect');
 const errorMsg = document.getElementById('errorMsg');
 const loader = document.getElementById('loader');
 
-let currentData = null;
+let currentEntries = [];
 
 searchBtn.addEventListener('click', async () => {
   const url = urlInput.value.trim();
-  if (!url) return showError('Please paste a YouTube URL.');
+  if (!url) return showError('Please paste a YouTube or YouTube Music URL.');
 
   hideError();
   resultCard.classList.add('hidden');
+  resultCard.innerHTML = '';
   loader.classList.remove('hidden');
 
   try {
@@ -34,82 +30,12 @@ searchBtn.addEventListener('click', async () => {
     }
 
     if (!res.ok) {
-      throw new Error(data.error || 'Failed to fetch video details.');
+      throw new Error(data.error || 'Failed to fetch details.');
     }
 
-    currentData = data;
-    thumbnail.src = data.thumbnail || 'https://via.placeholder.com/480x270?text=No+Thumbnail';
+    currentEntries = data.entries || [];
+    renderTrackTable(data);
 
-    // Populate Bitrate options
-    bitrateSelect.innerHTML = '';
-    (data.availableBitrates || ['128k', '192k', '256k', '320k']).forEach(b => {
-      const opt = document.createElement('option');
-      opt.value = b;
-      opt.textContent = `${b}ps`;
-      if (b === '192k') opt.selected = true;
-      bitrateSelect.appendChild(opt);
-    });
-
-    // Remove existing playlist container if present
-    let playlistContainer = document.getElementById('playlistContainer');
-    if (playlistContainer) playlistContainer.remove();
-
-    if (data.type === 'playlist') {
-      videoTitle.textContent = `${data.title} (${data.itemCount} tracks)`;
-      uploader.textContent = 'Playlist';
-
-      // Build checklist UI
-      playlistContainer = document.createElement('div');
-      playlistContainer.id = 'playlistContainer';
-      playlistContainer.style.marginTop = '15px';
-      playlistContainer.style.textAlign = 'left';
-      playlistContainer.style.maxHeight = '250px';
-      playlistContainer.style.overflowY = 'auto';
-      playlistContainer.style.border = '1px solid #333';
-      playlistContainer.style.padding = '10px';
-      playlistContainer.style.borderRadius = '8px';
-
-      const selectAllHeader = document.createElement('div');
-      selectAllHeader.style.marginBottom = '10px';
-      selectAllHeader.style.fontWeight = 'bold';
-      selectAllHeader.innerHTML = `
-        <label style="cursor:pointer;">
-          <input type="checkbox" id="selectAllCheckbox" checked> Select / Deselect All
-        </label>
-      `;
-      playlistContainer.appendChild(selectAllHeader);
-
-      data.entries.forEach((track, index) => {
-        const itemRow = document.createElement('div');
-        itemRow.style.display = 'flex';
-        itemRow.style.alignItems = 'center';
-        itemRow.style.gap = '10px';
-        itemRow.style.margin = '6px 0';
-
-        itemRow.innerHTML = `
-          <input type="checkbox" class="track-checkbox" value="${track.url}" id="track-${index}" checked>
-          <label for="track-${index}" style="cursor:pointer; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-            ${index + 1}. ${track.title}
-          </label>
-        `;
-        playlistContainer.appendChild(itemRow);
-      });
-
-      resultCard.appendChild(playlistContainer);
-
-      document.getElementById('selectAllCheckbox').addEventListener('change', (e) => {
-        const checkboxes = document.querySelectorAll('.track-checkbox');
-        checkboxes.forEach(cb => cb.checked = e.target.checked);
-      });
-
-      downloadBtn.textContent = 'Download Selected MP3s';
-    } else {
-      videoTitle.textContent = data.title || 'Unknown Title';
-      uploader.textContent = data.uploader || 'Unknown Channel';
-      downloadBtn.textContent = 'Download MP3';
-    }
-
-    resultCard.classList.remove('hidden');
   } catch (err) {
     showError(err.message);
   } finally {
@@ -117,74 +43,187 @@ searchBtn.addEventListener('click', async () => {
   }
 });
 
-downloadBtn.addEventListener('click', async () => {
-  const bitrate = bitrateSelect.value;
-  let urlsToDownload = [];
+function renderTrackTable(data) {
+  resultCard.innerHTML = '';
 
-  if (currentData.type === 'playlist') {
-    const selectedCheckboxes = document.querySelectorAll('.track-checkbox:checked');
-    urlsToDownload = Array.from(selectedCheckboxes).map(cb => cb.value);
+  const container = document.createElement('div');
+  container.className = 'table-container';
 
-    if (urlsToDownload.length === 0) {
+  const headerInfo = document.createElement('div');
+  headerInfo.style.display = 'flex';
+  headerInfo.style.justifyContent = 'space-between';
+  headerInfo.style.alignItems = 'center';
+  headerInfo.style.marginBottom = '15px';
+  headerInfo.innerHTML = `
+    <h3 style="margin:0;">${data.title} (${data.itemCount} ${data.itemCount === 1 ? 'track' : 'tracks'})</h3>
+  `;
+  container.appendChild(headerInfo);
+
+  const table = document.createElement('table');
+  table.className = 'music-table';
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th style="width: 40px;"><input type="checkbox" id="selectAllCb" checked></th>
+        <th>Title</th>
+        <th>Uploader</th>
+        <th>Bitrate</th>
+        <th>Duration</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody id="trackTableBody"></tbody>
+  `;
+  container.appendChild(table);
+
+  const bottomBar = document.createElement('div');
+  bottomBar.className = 'bottom-bar';
+  bottomBar.innerHTML = `
+    <span id="selectedCountText">Total: ${data.itemCount} | Selected: ${data.itemCount}</span>
+    <button id="downloadSelectedBtn" class="primary-btn">↓ Download Selected</button>
+  `;
+  container.appendChild(bottomBar);
+
+  resultCard.appendChild(container);
+  resultCard.classList.remove('hidden');
+
+  const tbody = document.getElementById('trackTableBody');
+  data.entries.forEach((track, index) => {
+    const tr = document.createElement('tr');
+    tr.id = `row-${index}`;
+    tr.innerHTML = `
+      <td><input type="checkbox" class="track-cb" value="${index}" checked></td>
+      <td class="title-cell">
+        <img src="${track.thumbnail}" alt="" class="track-thumb">
+        <span>${track.title}</span>
+      </td>
+      <td>${track.uploader}</td>
+      <td>
+        <select class="bitrate-select" id="bitrate-${index}">
+          <option value="128k">128kbps</option>
+          <option value="192k" selected>192kbps</option>
+          <option value="256k">256kbps</option>
+          <option value="320k">320kbps</option>
+        </select>
+      </td>
+      <td>${track.duration}</td>
+      <td>
+        <button class="icon-btn download-single-btn" data-index="${index}" title="Download Track">↓</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const selectAllCb = document.getElementById('selectAllCb');
+  const trackCbs = document.querySelectorAll('.track-cb');
+
+  selectAllCb.addEventListener('change', (e) => {
+    trackCbs.forEach(cb => cb.checked = e.target.checked);
+    updateSelectedCount();
+  });
+
+  trackCbs.forEach(cb => {
+    cb.addEventListener('change', () => {
+      updateSelectedCount();
+    });
+  });
+
+  document.querySelectorAll('.download-single-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const idx = e.currentTarget.getAttribute('data-index');
+      await downloadTrack(idx, e.currentTarget);
+    });
+  });
+
+  document.getElementById('downloadSelectedBtn').addEventListener('click', async () => {
+    const selectedIndices = Array.from(document.querySelectorAll('.track-cb:checked')).map(cb => cb.value);
+    if (selectedIndices.length === 0) {
       return showError('Please select at least one track to download.');
     }
-  } else {
-    urlsToDownload = [currentData.url || urlInput.value.trim()];
-  }
 
-  hideError();
-  downloadBtn.disabled = true;
+    const bulkBtn = document.getElementById('downloadSelectedBtn');
+    bulkBtn.disabled = true;
 
-  for (let i = 0; i < urlsToDownload.length; i++) {
-    const targetUrl = urlsToDownload[i];
-    downloadBtn.textContent = `Processing (${i + 1}/${urlsToDownload.length})...`;
-
-    try {
-      const response = await fetch('/api/convert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl, bitrate })
-      });
-
-      if (!response.ok) {
-        let errMessage = 'Download failed.';
-        try {
-          const errData = await response.json();
-          errMessage = errData.error || errMessage;
-        } catch (e) {
-          errMessage = 'Server error during conversion.';
-        }
-        throw new Error(errMessage);
+    for (let i = 0; i < selectedIndices.length; i++) {
+      const idx = selectedIndices[i];
+      bulkBtn.textContent = `Downloading (${i + 1}/${selectedIndices.length})...`;
+      const singleBtn = document.querySelector(`.download-single-btn[data-index="${idx}"]`);
+      await downloadTrack(idx, singleBtn);
+      if (i < selectedIndices.length - 1) {
+        await new Promise(r => setTimeout(r, 1200));
       }
-
-      const disposition = response.headers.get('Content-Disposition');
-      let filename = `track_${i + 1}.mp3`;
-      if (disposition && disposition.includes('filename=')) {
-        filename = disposition.split('filename=')[1].replace(/"/g, '');
-      }
-
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(downloadUrl);
-
-      if (urlsToDownload.length > 1) {
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    } catch (err) {
-      showError(`Failed on item ${i + 1}: ${err.message}`);
-      break;
     }
+
+    bulkBtn.disabled = false;
+    bulkBtn.textContent = '↓ Download Selected';
+  });
+}
+
+function updateSelectedCount() {
+  const selectedCount = document.querySelectorAll('.track-cb:checked').length;
+  const totalCount = currentEntries.length;
+  const countText = document.getElementById('selectedCountText');
+  if (countText) {
+    countText.textContent = `Total: ${totalCount} | Selected: ${selectedCount}`;
+  }
+}
+
+async function downloadTrack(index, btnElement) {
+  const track = currentEntries[index];
+  const bitrateSelect = document.getElementById(`bitrate-${index}`);
+  const bitrate = bitrateSelect ? bitrateSelect.value : '192k';
+
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.textContent = '⌛';
   }
 
-  downloadBtn.disabled = false;
-  downloadBtn.textContent = currentData.type === 'playlist' ? 'Download Selected MP3s' : 'Download MP3';
-});
+  try {
+    const response = await fetch('/api/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: track.url,
+        title: track.title,
+        bitrate: bitrate
+      })
+    });
+
+    if (!response.ok) {
+      let errMessage = 'Download failed.';
+      try {
+        const errData = await response.json();
+        errMessage = errData.error || errMessage;
+      } catch (e) {
+        errMessage = 'Stream failed.';
+      }
+      throw new Error(errMessage);
+    }
+
+    const disposition = response.headers.get('Content-Disposition');
+    let filename = `${track.title}.mp3`;
+    if (disposition && disposition.includes('filename=')) {
+      filename = disposition.split('filename=')[1].replace(/"/g, '');
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+
+    if (btnElement) btnElement.textContent = '✓';
+  } catch (err) {
+    showError(`Failed to download "${track.title}": ${err.message}`);
+    if (btnElement) btnElement.textContent = '✕';
+  } finally {
+    if (btnElement) btnElement.disabled = false;
+  }
+}
 
 function showError(msg) {
   errorMsg.textContent = msg;
