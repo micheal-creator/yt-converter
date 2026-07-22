@@ -189,13 +189,15 @@ async function downloadTrack(index, btnElement) {
       })
     });
 
-    if (!response.ok) {
+    const contentType = response.headers.get('Content-Type') || '';
+
+    if (!response.ok || contentType.includes('application/json')) {
       let errMessage = 'Download failed.';
       try {
         const errData = await response.json();
         errMessage = errData.error || errMessage;
       } catch (e) {
-        errMessage = 'Stream failed.';
+        errMessage = 'Server error during conversion.';
       }
       throw new Error(errMessage);
     }
