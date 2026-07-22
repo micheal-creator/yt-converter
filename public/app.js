@@ -26,27 +26,27 @@ searchBtn.addEventListener('click', async () => {
       body: JSON.stringify({ url })
     });
 
-    // Safely parse JSON or fall back if the response is not OK
     let data;
     try {
       data = await res.json();
     } catch (e) {
-      throw new Error('Server returned an invalid response. Please try again.');
+      throw new Error('Server returned an invalid response.');
     }
 
     if (!res.ok) {
       throw new Error(data.error || 'Failed to fetch video details.');
     }
 
-    currentUrl = url;
+    // Use the single video URL if a playlist was passed
+    currentUrl = data.firstVideoUrl || url;
 
-    // Handle Playlist vs Single Video
+    // Display real thumbnail and title details
+    thumbnail.src = data.thumbnail || 'https://via.placeholder.com/480x270?text=No+Thumbnail';
+    
     if (data.type === 'playlist') {
-      thumbnail.src = 'https://via.placeholder.com/480x270?text=YouTube+Playlist';
       videoTitle.textContent = `${data.title} (${data.itemCount} tracks)`;
       uploader.textContent = 'Playlist';
     } else {
-      thumbnail.src = data.thumbnail || '';
       videoTitle.textContent = data.title || 'Unknown Title';
       uploader.textContent = data.uploader || 'Unknown Channel';
     }
@@ -64,8 +64,7 @@ searchBtn.addEventListener('click', async () => {
     resultCard.classList.remove('hidden');
   } catch (err) {
     showError(err.message);
-  } finally {
-    loader.classList.add('hidden');
+  } finally {loader.classList.add('hidden');
   }
 });
 
@@ -99,7 +98,7 @@ downloadBtn.addEventListener('click', async () => {
       filename = disposition.split('filename=')[1].replace(/"/g, '');
     }
 
-    // Trigger browser file save from binary blob stream
+    // Trigger browser file download from response stream
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
