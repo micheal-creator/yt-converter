@@ -12,30 +12,49 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Regex to validate YouTube URLs
+// Regex to validate YouTube URLs (videos, music, shorts, playlists)
 const youtubeRegex = /^(https?:\/\/)?((www|music)\.)?(youtube\.com|youtu\.be)\/.+$/;
 
 /**
- * 1. Fetch Metadata Endpoint
+ * 1. Fetch Metadata Endpoint (Handles Videos & Playlists)
  */
 app.post('/api/analyze', async (req, res) => {
   const { url } = req.body;
 
-  if (!url || !YOUTUBE_URL_REGEX.test(url)) {
+  if (!url || !youtubeRegex.test(url)) {
     return res.status(400).json({ error: 'Please provide a valid YouTube URL.' });
   }
 
   try {
-    // Extract metadata using yt-dlp
+    // Extract metadata using yt-dlp (flatPlaylist ensures fast extraction for playlists)
     const output = await exec(url, {
       dumpSingleJson: true,
       noWarnings: true,
       noCallHome: true,
+      flatPlaylist: true,
     });
 
     const metadata = JSON.parse(output.stdout);
 
+    // If it's a playlist
+    if (metadata._type === 'playlist' || Array.isArray(metadata.entries)) {
+      return res.json({
+        type: 'playlist',
+        title: metadata.title || 'YouTube Playlist',
+        itemCount: metadata.entries ? metadata.entries.length : 0,
+        entries: (metadata.entries || []).map(entry => ({
+          title: entry.title,
+          url: entry.url || `https://www.youtube.com/watch?v=${entry.id}`,
+          duration: entry.duration || 0,
+          uploader: entry.uploader || 'Unknown Artist'
+        })),
+        availableBitrates: ['128k', '192k', '256k', '320k']
+      });
+    }
+
+    // Standard Single Video
     res.json({
+      type: 'video',
       title: metadata.title || 'Unknown Title',
       duration: metadata.duration || 0,
       thumbnail: metadata.thumbnail || '',
@@ -44,7 +63,7 @@ app.post('/api/analyze', async (req, res) => {
     });
   } catch (err) {
     console.error('Metadata extraction error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch video information. Please try again.' });
+    res.status(500).json({ error: 'Failed to fetch video/playlist information. Please try again.' });
   }
 });
 
@@ -54,35 +73,34 @@ app.post('/api/analyze', async (req, res) => {
 app.post('/api/convert', async (req, res) => {
   const { url, bitrate = '192k' } = req.body;
 
-  if (!url || !YOUTUBE_URL_REGEX.test(url)) {
+  if (!url || !youtubeRegex.test(url)) {
     return res.status(400).json({ error: 'Invalid YouTube URL.' });
   }
 
-  // Allowed bitrates defense
   const validBitrates = ['128k', '192k', '256k', '320k'];
   const targetBitrate = validBitrates.includes(bitrate) ? bitrate : '192k';
 
   try {
-    // Get video title for download filename header
+    // Force single video processing for conversion even if a playlist link was passed
     const info = await exec(url, {
       dumpSingleJson: true,
       noWarnings: true,
+      noPlaylist: true
     });
+
     const metadata = JSON.parse(info.stdout);
     const safeTitle = (metadata.title || 'audio').replace(/[^a-zA-Z0-9_\-\s]/g, '');
 
-    // Configure response headers for download
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.mp3"`);
 
-    // Spawn yt-dlp stream process
     const ytStream = exec(url, {
       output: '-',
       format: 'bestaudio/best',
       noWarnings: true,
+      noPlaylist: true
     }, { stdio: ['ignore', 'pipe', 'ignore'] });
 
-    // Pipe raw audio stream into FFmpeg -> stream MP3 back directly to res
     ffmpeg(ytStream.stdout)
       .audioCodec('libmp3lame')
       .audioBitrate(targetBitrate)
@@ -95,11 +113,9 @@ app.post('/api/convert', async (req, res) => {
       })
       .pipe(res, { end: true });
 
-    // Handle client disconnection
     req.on('close', () => {
       ytStream.kill();
     });
-
   } catch (err) {
     console.error('Conversion setup error:', err.message);
     if (!res.headersSent) {
