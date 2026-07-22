@@ -12,10 +12,12 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Regex to validate YouTube & YouTube Music URLs
 const youtubeRegex = /^(https?:\/\/)?((www|music)\.)?(youtube\.com|youtu\.be)\/.+$/;
 
-// User-Agent string to prevent YouTube cloud IP blocks
+// User-Agent & Extractor Client to prevent YouTube datacenter IP blocks
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const PLAYER_CLIENT = 'youtube:player_client=mweb,android';
 
 /**
  * 1. Fetch Metadata Endpoint
@@ -24,7 +26,7 @@ app.post('/api/analyze', async (req, res) => {
   const { url } = req.body;
 
   if (!url || !youtubeRegex.test(url)) {
-    return res.status(400).json({ error: 'Please provide a valid YouTube URL.' });
+    return res.status(400).json({ error: 'Please provide a valid YouTube or YouTube Music URL.' });
   }
 
   try {
@@ -34,29 +36,45 @@ app.post('/api/analyze', async (req, res) => {
       noCallHome: true,
       flatPlaylist: true,
       userAgent: USER_AGENT,
+      extractorArgs: PLAYER_CLIENT,
     });
 
     const metadata = JSON.parse(output.stdout);
 
+    // Handle Playlist
     if (metadata._type === 'playlist' || Array.isArray(metadata.entries)) {
       const firstTrack = metadata.entries && metadata.entries[0] ? metadata.entries[0] : null;
       const playlistThumbnail = metadata.thumbnails?.[0]?.url || 
-                                (firstTrack ? `https://i.ytimg.com/vi/${firstTrack.id}/hqdefault.jpg` : '');
+                                (firstTrack && firstTrack.id ? `https://i.ytimg.com/vi/${firstTrack.id}/hqdefault.jpg` : '');
+
+      const formattedEntries = (metadata.entries || []).map((entry, idx) => {
+        let trackUrl = url;
+        if (entry.id) {
+          trackUrl = `https://www.youtube.com/watch?v=${entry.id}`;
+        } else if (entry.url && entry.url.startsWith('http')) {
+          trackUrl = entry.url;
+        } else if (entry.url && entry.url.includes('watch?v=')) {
+          const id = entry.url.split('watch?v=')[1].split('&')[0];
+          trackUrl = `https://www.youtube.com/watch?v=${id}`;
+        }
+        return {
+          title: entry.title || `Track ${idx + 1}`,
+          url: trackUrl
+        };
+      });
 
       return res.json({
         type: 'playlist',
         title: metadata.title || 'YouTube Playlist',
-        itemCount: metadata.entries ? metadata.entries.length : 0,
+        itemCount: formattedEntries.length,
         thumbnail: playlistThumbnail,
-        entries: (metadata.entries || []).map((entry, idx) => ({
-          title: entry.title || `Track ${idx + 1}`,
-          url: entry.url || (entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : url)
-        })),
+        entries: formattedEntries,
         uploader: metadata.uploader || metadata.channel || 'Playlist',
         availableBitrates: ['128k', '192k', '256k', '320k']
       });
     }
 
+    // Standard Single Video / Music Track
     res.json({
       type: 'video',
       url: url,
@@ -91,6 +109,7 @@ app.post('/api/convert', async (req, res) => {
       noWarnings: true,
       noPlaylist: true,
       userAgent: USER_AGENT,
+      extractorArgs: PLAYER_CLIENT,
     });
 
     const metadata = JSON.parse(info.stdout);
@@ -105,6 +124,7 @@ app.post('/api/convert', async (req, res) => {
       noWarnings: true,
       noPlaylist: true,
       userAgent: USER_AGENT,
+      extractorArgs: PLAYER_CLIENT,
     }, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     ytStream.stderr.on('data', (data) => {
