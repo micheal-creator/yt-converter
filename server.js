@@ -123,24 +123,31 @@ app.post('/api/convert', async (req, res) => {
   const safeTitle = (title || 'audio').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim() || 'audio';
 
   try {
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.mp3"`);
-
-    // Stream single video directly without running pre-info command to prevent Cloud IP 403 blocks
-    const ytStream = exec(url, {
-      output: '-',
+    // 1. Extract direct stream URL from yt-dlp first
+    const directUrlProc = await exec(url, {
+      getUrl: true,
       format: 'bestaudio/best',
       noWarnings: true,
       noPlaylist: true,
       userAgent: USER_AGENT,
       extractorArgs: PLAYER_CLIENT,
-    }, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-    ytStream.stderr.on('data', (data) => {
-      console.error(`yt-dlp stderr: ${data.toString()}`);
     });
 
-    ffmpeg(ytStream.stdout)
+    const audioUrl = directUrlProc.stdout ? directUrlProc.stdout.trim() : '';
+
+    if (!audioUrl) {
+      return res.status(500).json({ error: 'Could not extract audio stream link.' });
+    }
+
+    // 2. Set standard headers for binary MP3 download
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.mp3"`);
+
+    // 3. Pass clean direct stream URL to FFmpeg for MP3 encoding
+    ffmpeg(audioUrl)
+      .inputOptions([
+        '-user_agent', USER_AGENT
+      ])
       .audioCodec('libmp3lame')
       .audioBitrate(targetBitrate)
       .format('mp3')
@@ -152,9 +159,6 @@ app.post('/api/convert', async (req, res) => {
       })
       .pipe(res, { end: true });
 
-    req.on('close', () => {
-      ytStream.kill();
-    });
   } catch (err) {
     console.error('Conversion setup error:', err.message);
     if (!res.headersSent) {
