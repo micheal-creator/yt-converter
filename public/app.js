@@ -26,16 +26,34 @@ searchBtn.addEventListener('click', async () => {
       body: JSON.stringify({ url })
     });
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to fetch details');
+    // Safely parse JSON or fall back if the response is not OK
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error('Server returned an invalid response. Please try again.');
+    }
+
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to fetch video details.');
+    }
 
     currentUrl = url;
-    thumbnail.src = data.thumbnail;
-    videoTitle.textContent = data.title;
-    uploader.textContent = data.uploader;
 
+    // Handle Playlist vs Single Video
+    if (data.type === 'playlist') {
+      thumbnail.src = 'https://via.placeholder.com/480x270?text=YouTube+Playlist';
+      videoTitle.textContent = `${data.title} (${data.itemCount} tracks)`;
+      uploader.textContent = 'Playlist';
+    } else {
+      thumbnail.src = data.thumbnail || '';
+      videoTitle.textContent = data.title || 'Unknown Title';
+      uploader.textContent = data.uploader || 'Unknown Channel';
+    }
+
+    // Populate Bitrate options
     bitrateSelect.innerHTML = '';
-    data.availableBitrates.forEach(b => {
+    (data.availableBitrates || ['128k', '192k', '256k', '320k']).forEach(b => {
       const opt = document.createElement('option');
       opt.value = b;
       opt.textContent = `${b}ps`;
@@ -64,8 +82,14 @@ downloadBtn.addEventListener('click', async () => {
     });
 
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.error || 'Download failed');
+      let errMessage = 'Download failed.';
+      try {
+        const errData = await response.json();
+        errMessage = errData.error || errMessage;
+      } catch (e) {
+        errMessage = 'Server error during conversion.';
+      }
+      throw new Error(errMessage);
     }
 
     // Extract filename from header or fallback
