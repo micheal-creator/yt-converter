@@ -1,8 +1,15 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
-# Install FFmpeg, Python, and dependencies needed by yt-dlp
-RUN apk add --no-cache ffmpeg python3 py3-pip && \
-    ln -sf /usr/bin/python3 /usr/bin/python
+# Install FFmpeg, Python3, pip, and yt-dlp
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        python3 \
+        python3-pip \
+        python3-venv && \
+    pip3 install --no-cache-dir --break-system-packages yt-dlp && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 
