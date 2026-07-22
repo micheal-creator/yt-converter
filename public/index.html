@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube to MP3 Converter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>YouTube to MP3</h1>
+    <p class="subtitle">Convert and stream audio directly in high quality</p>
+
+    <div class="search-box">
+      <input type="text" id="urlInput" placeholder="Paste YouTube link here..." />
+      <button id="searchBtn">Search</button>
+    </div>
+
+    <div id="errorMsg" class="error-msg hidden"></div>
+
+    <div id="resultCard" class="card hidden">
+      <img id="thumbnail" src="" alt="Thumbnail" />
+      <div class="info">
+        <h3 id="videoTitle"></h3>
+        <p id="uploader"></p>
+        
+        <div class="controls">
+          <label for="bitrateSelect">Quality:</label>
+          <select id="bitrateSelect"></select>
+          <button id="downloadBtn">Download MP3</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loader" class="loader hidden"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
